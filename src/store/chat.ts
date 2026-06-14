@@ -21,6 +21,7 @@ interface ChatStore {
   createConversation: () => Promise<void>
   selectConversation: (id: string) => Promise<void>
   addMessage: (message: Message) => void
+  updateMessage: (id: string, content: string) => void
   sendMessage: (content: string) => Promise<void>
 }
 
@@ -78,22 +79,33 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     set({ messages: [...messages, message] })
   },
 
+  updateMessage: (id: string, content: string) => {
+    const { messages } = get()
+    const updated = messages.map((msg) =>
+      msg.id === id ? { ...msg, content } : msg
+    )
+    set({ messages: updated })
+  },
+
   sendMessage: async (content: string) => {
-    const { currentConversation, addMessage, setSending } = get()
+    const { currentConversation, addMessage, updateMessage, setSending } = get()
     if (!currentConversation) return
 
     setSending(true)
     set({ error: null })
 
     try {
+      const userMessageId = Date.now().toString()
       addMessage({
-        id: Date.now().toString(),
+        id: userMessageId,
         role: 'user',
         content,
       })
 
       let fullResponse = ''
-      const messageId = Date.now().toString()
+      const assistantMessageId = Date.now().toString() + '_a'
+      let hasAssistantMessage = false
+      let lineBuffer = ''
 
       try {
         const reader = await apiClient.sendMessage(currentConversation.id, content)
@@ -103,8 +115,12 @@ export const useChatStore = create<ChatStore>((set, get) => ({
           const { done, value } = await reader.read()
           if (done) break
 
-          const chunk = decoder.decode(value)
-          const lines = chunk.split('\n')
+          const chunk = decoder.decode(value, { stream: true })
+          lineBuffer += chunk
+          const lines = lineBuffer.split('\n')
+
+          // Keep the last incomplete line in the buffer
+          lineBuffer = lines.pop() || ''
 
           for (const line of lines) {
             if (line.startsWith('data: ')) {
@@ -112,18 +128,44 @@ export const useChatStore = create<ChatStore>((set, get) => ({
                 const data = JSON.parse(line.slice(6))
                 if (data.type === 'text') {
                   fullResponse += data.content
-                  addMessage({
-                    id: messageId,
-                    role: 'assistant',
-                    content: fullResponse,
-                  })
+                  if (!hasAssistantMessage) {
+                    addMessage({
+                      id: assistantMessageId,
+                      role: 'assistant',
+                      content: fullResponse,
+                    })
+                    hasAssistantMessage = true
+                  } else {
+                    updateMessage(assistantMessageId, fullResponse)
+                  }
                 } else if (data.type === 'error') {
                   set({ error: data.content })
                 }
               } catch (e) {
-                // Ignore JSON parse errors for incomplete data
+                // Ignore JSON parse errors
               }
             }
+          }
+        }
+
+        // Process any remaining data in the buffer
+        if (lineBuffer && lineBuffer.startsWith('data: ')) {
+          try {
+            const data = JSON.parse(lineBuffer.slice(6))
+            if (data.type === 'text') {
+              fullResponse += data.content
+              if (!hasAssistantMessage) {
+                addMessage({
+                  id: assistantMessageId,
+                  role: 'assistant',
+                  content: fullResponse,
+                })
+              } else {
+                updateMessage(assistantMessageId, fullResponse)
+              }
+            }
+          } catch (e) {
+            // Ignore
           }
         }
       } catch (error: any) {

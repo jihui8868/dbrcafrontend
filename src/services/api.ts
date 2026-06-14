@@ -86,12 +86,31 @@ class ApiClient {
   }
 
   async sendMessage(conversationId: string, message: string): Promise<ReadableStreamDefaultReader<Uint8Array>> {
-    const response = await this.client.post(
-      `/chat/${conversationId}/message`,
-      { message },
-      { responseType: 'stream' }
+    const token = this.token
+    const response = await fetch(
+      `http://localhost:8000/chat/${conversationId}/message`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { 'Authorization': `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify({ message }),
+      }
     )
-    return response.data.getReader()
+
+    if (!response.ok) {
+      if (response.status === 401) {
+        this.clearAuth()
+        window.location.href = '/login'
+      }
+      throw new Error(`HTTP ${response.status}`)
+    }
+
+    if (!response.body) {
+      throw new Error('No response body')
+    }
+    return response.body.getReader()
   }
 }
 
