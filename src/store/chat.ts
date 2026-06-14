@@ -70,7 +70,14 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     const { conversations } = get()
     const conversation = conversations.find((c) => c.id === id)
     if (conversation) {
-      set({ currentConversation: conversation, messages: [] })
+      set({ currentConversation: conversation, isLoading: true, error: null })
+      try {
+        const messages = await apiClient.getMessages(id)
+        set({ messages, isLoading: false })
+      } catch (error: any) {
+        set({ error: 'Failed to load messages', isLoading: false })
+        set({ messages: [] })
+      }
     }
   },
 

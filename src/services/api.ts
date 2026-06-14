@@ -85,6 +85,11 @@ class ApiClient {
     return response.data
   }
 
+  async getMessages(conversationId: string): Promise<any[]> {
+    const response = await this.client.get<any[]>(`/chat/${conversationId}/messages`)
+    return response.data
+  }
+
   async sendMessage(conversationId: string, message: string): Promise<ReadableStreamDefaultReader<Uint8Array>> {
     const token = this.token
     const response = await fetch(
