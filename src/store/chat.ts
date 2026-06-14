@@ -130,37 +130,104 @@ export const useChatStore = create<ChatStore>((set, get) => ({
           lineBuffer = lines.pop() || ''
 
           for (const line of lines) {
-            if (line.startsWith('data: ')) {
-              try {
-                const data = JSON.parse(line.slice(6))
-                if (data.type === 'text') {
-                  fullResponse += data.content
-                  if (!hasAssistantMessage) {
-                    addMessage({
-                      id: assistantMessageId,
-                      role: 'assistant',
-                      content: fullResponse,
-                    })
-                    hasAssistantMessage = true
-                  } else {
-                    updateMessage(assistantMessageId, fullResponse)
-                  }
-                } else if (data.type === 'error') {
-                  set({ error: data.content })
+            if (!line.trim()) continue
+
+            try {
+              // Parse JSON event
+              const event = JSON.parse(line)
+              const eventType = event.event
+              const eventData = event.data || {}
+
+              console.log('Received event:', eventType, eventData)
+
+              if (eventType === 'llm_start') {
+                // LLM 开始处理
+                if (!hasAssistantMessage) {
+                  fullResponse = '💭 思考中...'
+                  addMessage({
+                    id: assistantMessageId,
+                    role: 'assistant',
+                    content: fullResponse,
+                  })
+                  hasAssistantMessage = true
                 }
-              } catch (e) {
-                // Ignore JSON parse errors
+              } else if (eventType === 'llm_stream' && eventData.content) {
+                // LLM 流式内容 - 替换思考指示，追加实际内容
+                if (fullResponse === '💭 思考中...') {
+                  fullResponse = eventData.content
+                } else {
+                  fullResponse += eventData.content
+                }
+                if (!hasAssistantMessage) {
+                  addMessage({
+                    id: assistantMessageId,
+                    role: 'assistant',
+                    content: fullResponse,
+                  })
+                  hasAssistantMessage = true
+                } else {
+                  updateMessage(assistantMessageId, fullResponse)
+                }
+              } else if (eventType === 'tool_start') {
+                // 工具开始执行
+                fullResponse += `\n📍 工具执行: ${eventData.tool}\n`
+                if (!hasAssistantMessage) {
+                  addMessage({
+                    id: assistantMessageId,
+                    role: 'assistant',
+                    content: fullResponse,
+                  })
+                  hasAssistantMessage = true
+                } else {
+                  updateMessage(assistantMessageId, fullResponse)
+                }
+              } else if (eventType === 'tool_end') {
+                // 工具执行完成
+                fullResponse += `✅ ${eventData.tool} 执行完成\n`
+                updateMessage(assistantMessageId, fullResponse)
+              } else if (eventType === 'agent_end') {
+                // 代理处理完成 - 添加最终输出
+                if (eventData.output && !eventData.output.startsWith('[')) {
+                  // 只添加纯文本输出，跳过内部数据结构
+                  if (fullResponse.includes('💭') || fullResponse.includes('📍')) {
+                    // 如果之前有工具执行记录，直接追加
+                    fullResponse += eventData.output
+                  } else {
+                    // 否则使用输出替换之前的内容
+                    fullResponse = eventData.output
+                  }
+                  updateMessage(assistantMessageId, fullResponse)
+                }
+              } else if (eventType === 'error') {
+                // 错误
+                set({ error: eventData.message || 'Unknown error' })
+              } else if (eventType === 'done') {
+                // 流式处理完成
+                console.log('Stream processing completed')
+              } else if (eventType === 'user_message') {
+                // 用户消息（可选处理）
+                console.log('User message event received')
+              }
+            } catch (e) {
+              // Ignore JSON parse errors for non-JSON lines
+              if (line.trim()) {
+                console.debug('Non-JSON line received:', line)
               }
             }
           }
         }
 
         // Process any remaining data in the buffer
-        if (lineBuffer && lineBuffer.startsWith('data: ')) {
+        if (lineBuffer && lineBuffer.trim()) {
           try {
-            const data = JSON.parse(lineBuffer.slice(6))
-            if (data.type === 'text') {
-              fullResponse += data.content
+            const event = JSON.parse(lineBuffer)
+            const eventType = event.event
+            const eventData = event.data || {}
+
+            console.log('Processing buffer event:', eventType, eventData)
+
+            if (eventType === 'llm_stream' && eventData.content) {
+              fullResponse += eventData.content
               if (!hasAssistantMessage) {
                 addMessage({
                   id: assistantMessageId,
@@ -168,6 +235,15 @@ export const useChatStore = create<ChatStore>((set, get) => ({
                   content: fullResponse,
                 })
               } else {
+                updateMessage(assistantMessageId, fullResponse)
+              }
+            } else if (eventType === 'agent_end' && eventData.output) {
+              if (eventData.output && !eventData.output.startsWith('[')) {
+                if (fullResponse.includes('💭') || fullResponse.includes('📍')) {
+                  fullResponse += eventData.output
+                } else {
+                  fullResponse = eventData.output
+                }
                 updateMessage(assistantMessageId, fullResponse)
               }
             }
